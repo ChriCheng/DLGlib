@@ -12,15 +12,18 @@ import torch.nn.functional as F
 from torch.autograd import grad
 import torchvision
 from torchvision import models, datasets, transforms
+
 print(torch.__version__, torchvision.__version__)
 
 from utils import label_to_onehot, cross_entropy_for_onehot
 
-parser = argparse.ArgumentParser(description='Deep Leakage from Gradients.')
-parser.add_argument('--index', type=int, default="25",
-                    help='the index for leaking images on CIFAR.')
-parser.add_argument('--image', type=str,default="",
-                    help='the path to customized image.')
+parser = argparse.ArgumentParser(description="Deep Leakage from Gradients.")
+parser.add_argument(
+    "--index", type=int, default="25", help="the index for leaking images on CIFAR."
+)
+parser.add_argument(
+    "--image", type=str, default="", help="the path to customized image."
+)
 args = parser.parse_args()
 
 device = "cpu"
@@ -42,12 +45,15 @@ if len(args.image) > 1:
 
 gt_data = gt_data.view(1, *gt_data.size())
 gt_label = torch.Tensor([dst[img_index][1]]).long().to(device)
-gt_label = gt_label.view(1, )
+gt_label = gt_label.view(
+    1,
+)
 gt_onehot_label = label_to_onehot(gt_label)
 
 plt.imshow(tt(gt_data[0].cpu()))
 
 from models.vision import LeNet, weights_init
+
 net = LeNet().to(device)
 
 
@@ -56,7 +62,7 @@ torch.manual_seed(1234)
 net.apply(weights_init)
 criterion = cross_entropy_for_onehot
 
-# compute original gradient 
+# compute original gradient
 pred = net(gt_data)
 y = criterion(pred, gt_onehot_label)
 dy_dx = torch.autograd.grad(y, net.parameters())
@@ -74,23 +80,26 @@ optimizer = torch.optim.LBFGS([dummy_data, dummy_label])
 
 history = []
 for iters in range(300):
+
     def closure():
         optimizer.zero_grad()
 
-        dummy_pred = net(dummy_data) 
+        dummy_pred = net(dummy_data)
         dummy_onehot_label = F.softmax(dummy_label, dim=-1)
-        dummy_loss = criterion(dummy_pred, dummy_onehot_label) 
-        dummy_dy_dx = torch.autograd.grad(dummy_loss, net.parameters(), create_graph=True)
-        
+        dummy_loss = criterion(dummy_pred, dummy_onehot_label)
+        dummy_dy_dx = torch.autograd.grad(
+            dummy_loss, net.parameters(), create_graph=True
+        )
+
         grad_diff = 0
-        for gx, gy in zip(dummy_dy_dx, original_dy_dx): 
+        for gx, gy in zip(dummy_dy_dx, original_dy_dx):
             grad_diff += ((gx - gy) ** 2).sum()
         grad_diff.backward()
-        
+
         return grad_diff
-    
+
     optimizer.step(closure)
-    if iters % 10 == 0: 
+    if iters % 10 == 0:
         current_loss = closure()
         print(iters, "%.4f" % current_loss.item())
         history.append(tt(dummy_data[0].cpu()))
@@ -100,6 +109,6 @@ for i in range(30):
     plt.subplot(3, 10, i + 1)
     plt.imshow(history[i])
     plt.title("iter=%d" % (i * 10))
-    plt.axis('off')
+    plt.axis("off")
 
 plt.show()
