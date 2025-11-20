@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import math
+import os
 import numpy as np
 from pprint import pprint
 
@@ -45,8 +46,25 @@ img_index = args.index
 
 
 if len(args.image) > 1:
-    gt_data = Image.open(args.image)
-    gt_data = tp(gt_data).to(device)
+    # gt_data = Image.open(args.image)
+    # gt_data = tp(gt_data).to(device)
+
+    # 1. 读入图片（PNG / JPG 都行）
+    img = Image.open(args.image).convert("RGB")
+
+    # 2. resize 到模型需要的 32×32
+    img_resized = img.resize((32, 32))
+
+    # 3. 存储 resized 图片（如 photo.png → photo_resize.png）
+    folder, filename = os.path.split(args.image)
+    name, ext = os.path.splitext(filename)
+    resized_path = os.path.join(folder, f"{name}_resize{ext}")
+    img_resized.save(resized_path)
+    print(f"[✔] resized 图像已保存到： {resized_path}")
+
+    # 4. 转 tensor
+    gt_data = tp(img_resized).to(device)
+
 else:
     gt_data = tp(dst[img_index][0]).to(device)
 
