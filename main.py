@@ -218,56 +218,65 @@ def run_DLG():
 
 
 def run_iDLG():
-    # iDLG: 先根据最后一层梯度预测 label，后面直接用这个 one-hot 做监督
-    grad_last_weight = original_dy_dx[-2]  # 最后一层 FC 的 weight 梯度
+
+    # 1. 从最后一层梯度预测标签（核心步骤）
+    grad_last_weight = original_dy_dx[-2]  # 最后一层 FC 权重梯度
     label_pred = torch.argmin(torch.sum(grad_last_weight, dim=-1)).detach()
-    gt_onehot_label_iDLG = (
-        F.one_hot(label_pred, num_classes).float().view(1, -1).to(device)
-    )
+    label_pred = label_pred.view(1).long().to(device)
 
-    # generate dummy data (iDLG 不再优化 dummy_label)
+    # 2. 生成 dummy 数据
     dummy_data = torch.randn(gt_data.size()).to(device).requires_grad_(True)
-    dummy_label = None
+    dummy_label = None  # iDLG 不优化 dummy_label
 
-    optimizer = torch.optim.LBFGS([dummy_data], line_search_fn="strong_wolfe")
+    # 3. iDLG 必须使用整数版 CrossEntropyLoss
+    CE_loss = nn.CrossEntropyLoss()
+
+    # 4. 标准 LBFGS（不要 strong_wolfe）
+    optimizer = torch.optim.LBFGS([dummy_data])
 
     history = []
     recent_losses = []
     plateau_patience = 3
-    stop_iter = None
     final_loss = None
+    stop_iter = None
 
+    # 5. 迭代优化
     for iters in range(300):
 
         def closure():
             optimizer.zero_grad()
 
+            # 前向
             dummy_pred = net(dummy_data)
-            dummy_loss = criterion(dummy_pred, gt_onehot_label_iDLG)
 
+            # CrossEntropyLoss(pred, integer_label)
+            dummy_loss = CE_loss(dummy_pred, label_pred)
+
+            # 计算新的 dummy 梯度
             dummy_dy_dx = torch.autograd.grad(
                 dummy_loss, net.parameters(), create_graph=True
             )
 
+            # 梯度距离（攻击核心）
             grad_diff = 0
             for gx, gy in zip(dummy_dy_dx, original_dy_dx):
                 grad_diff += ((gx - gy) ** 2).sum()
-            grad_diff.backward()
 
+            grad_diff.backward()
             return grad_diff
 
         optimizer.step(closure)
 
-        with torch.no_grad():
-            if iters % 10 == 0:
+        # 记录可视化
+        if iters % 10 == 0:
+            with torch.no_grad():
                 dummy_pred = net(dummy_data)
-                current_loss = criterion(dummy_pred, gt_onehot_label_iDLG)
-                current_value = current_loss.item()
-                final_loss = current_value
-                print(f"[iDLG] iter {iters} loss = {current_value:.4f}")
+                current_loss = CE_loss(dummy_pred, label_pred).item()
+                current_value = current_loss
+                final_loss = current_loss
+                print(f"[iDLG] iter {iters} loss = {current_loss:.4f}")
                 history.append(tt(dummy_data[0].detach().cpu()))
                 recent_losses.append(current_value)
-
                 if len(recent_losses) >= plateau_patience:
                     window = recent_losses[-plateau_patience:]
                     if len(set(window)) == 1:
