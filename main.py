@@ -88,7 +88,10 @@ if args.image:
     # 3. to tensor
     gt_data = tp(img_for_model).to(device)
 
+    # 4. fake label
     gt_label = torch.Tensor([dst[25][1]]).long().to(device)
+    print(f"⚠️  Using fake label: {dst[25][1]} for customized image.")
+
 
 else:
     gt_data = tp(dst[img_index][0]).to(device)
@@ -129,36 +132,13 @@ original_dy_dx = list(
 # So this is FedSGD pattern where only one batch is used to compute gradient
 # even just one epoch of training hhh
 
-# num_classes 可以从 onehot 直接拿，方便后面 iDLG 用
 num_classes = gt_onehot_label.size(1)
 
 
-def run_attack(method):
-    """在同一张图上跑一次指定方法(DLG / iDLG)，返回关键结果，用于单跑或比较模式。"""
-
-    # iDLG: 先根据最后一层梯度预测 label，后面直接用这个 one-hot 做监督
-    if method == "iDLG":
-        # original_dy_dx[-2] 对应最后一层 FC 的 weight (num_classes, hidden_dim)
-        grad_last_weight = original_dy_dx[-2]
-        # 按 iDLG 论文/代码的套路：对每个类别的梯度求和，再取 argmin
-        label_pred = torch.argmin(torch.sum(grad_last_weight, dim=-1)).detach()
-        # 变成 one-hot，形状还是 (1, num_classes)，和 gt_onehot_label 对齐
-        gt_onehot_label_iDLG = (
-            F.one_hot(label_pred, num_classes).float().view(1, -1).to(device)
-        )
-    else:
-        label_pred = None
-        gt_onehot_label_iDLG = None
-
+def run_DLG():
     # generate dummy data and label
     dummy_data = torch.randn(gt_data.size()).to(device).requires_grad_(True)
-
-    if method == "DLG":
-        dummy_label = (
-            torch.randn(gt_onehot_label.size()).to(device).requires_grad_(True)
-        )
-    else:
-        dummy_label = None  # iDLG 不再优化 label，只优化 dummy_data 就好
+    dummy_label = torch.randn(gt_onehot_label.size()).to(device).requires_grad_(True)
     # data and label are following normal distribution(N(0,1)) to initialize
 
     # nobody care about this dummy init image (
@@ -166,12 +146,9 @@ def run_attack(method):
     # plt.imshow(tt(dummy_data[0].detach().cpu()))
     # plt.axis("off")
 
-    if method == "DLG":
-        optimizer = torch.optim.LBFGS(
-            [dummy_data, dummy_label], line_search_fn="strong_wolfe"
-        )
-    else:
-        optimizer = torch.optim.LBFGS([dummy_data], line_search_fn="strong_wolfe")
+    optimizer = torch.optim.LBFGS(
+        [dummy_data, dummy_label], line_search_fn="strong_wolfe"
+    )
     # qutoted from DLG ‘We use L-BFGS [25] with learning rate 1,
     # history size 100 and max iterations 20 and optimize for 1200 iterations
     # and 100 iterations for image and text task respectively
@@ -189,14 +166,9 @@ def run_attack(method):
             optimizer.zero_grad()
 
             dummy_pred = net(dummy_data)
-
-            if method == "DLG":
-                dummy_onehot_label = F.softmax(dummy_label, dim=-1)
-                # apply softmax to make dummy_label one-hot like
-                dummy_loss = criterion(dummy_pred, dummy_onehot_label)
-            else:
-                # iDLG：直接用从梯度预测出来的 label 的 one-hot
-                dummy_loss = criterion(dummy_pred, gt_onehot_label_iDLG)
+            dummy_onehot_label = F.softmax(dummy_label, dim=-1)
+            # apply softmax to make dummy_label one-hot like
+            dummy_loss = criterion(dummy_pred, dummy_onehot_label)
 
             dummy_dy_dx = torch.autograd.grad(
                 dummy_loss, net.parameters(), create_graph=True
@@ -214,14 +186,11 @@ def run_attack(method):
         with torch.no_grad():  # record history and avoid unnecessary computation graph
             if iters % 10 == 0:
                 dummy_pred = net(dummy_data)
-                if method == "DLG":
-                    dummy_onehot = F.softmax(dummy_label, dim=-1)
-                    current_loss = criterion(dummy_pred, dummy_onehot)
-                else:
-                    current_loss = criterion(dummy_pred, gt_onehot_label_iDLG)
+                dummy_onehot = F.softmax(dummy_label, dim=-1)
+                current_loss = criterion(dummy_pred, dummy_onehot)
                 current_value = current_loss.item()
                 final_loss = current_value
-                print(f"[{method}] iter {iters} loss = {current_value:.4f}")
+                print(f"[DLG] iter {iters} loss = {current_value:.4f}")
                 history.append(tt(dummy_data[0].detach().cpu()))
                 recent_losses.append(current_value)
                 if len(recent_losses) >= plateau_patience:
@@ -229,21 +198,18 @@ def run_attack(method):
                     if len(set(window)) == 1:
                         stop_iter = iters
                         print(
-                            "[%s] Loss stayed at %.4f for %d snapshots; stop optimizing."
-                            % (method, current_value, plateau_patience)
+                            "[DLG] Loss stayed at %.4f for %d snapshots; stop optimizing."
+                            % (current_value, plateau_patience)
                         )
                         break
 
-    # 额外返回一些关键信息，方便 --comp 模式下做对比
-    if method == "DLG" and dummy_label is not None:
-        with torch.no_grad():
-            dummy_onehot = F.softmax(dummy_label, dim=-1)
-            pred_label = torch.argmax(dummy_onehot, dim=-1).item()
-    else:
-        pred_label = label_pred.item() if label_pred is not None else None
+    # 最终标签预测（softmax(dummy_label)）
+    with torch.no_grad():
+        dummy_onehot = F.softmax(dummy_label, dim=-1)
+        pred_label = torch.argmax(dummy_onehot, dim=-1).item()
 
     return {
-        "method": method,
+        "method": "DLG",
         "history": history,
         "final_loss": final_loss,
         "stop_iter": stop_iter,
@@ -251,12 +217,81 @@ def run_attack(method):
     }
 
 
-# ---------------- 比较模式：同时跑 DLG 和 iDLG ----------------
+def run_iDLG():
+    # iDLG: 先根据最后一层梯度预测 label，后面直接用这个 one-hot 做监督
+    grad_last_weight = original_dy_dx[-2]  # 最后一层 FC 的 weight 梯度
+    label_pred = torch.argmin(torch.sum(grad_last_weight, dim=-1)).detach()
+    gt_onehot_label_iDLG = (
+        F.one_hot(label_pred, num_classes).float().view(1, -1).to(device)
+    )
+
+    # generate dummy data (iDLG 不再优化 dummy_label)
+    dummy_data = torch.randn(gt_data.size()).to(device).requires_grad_(True)
+    dummy_label = None
+
+    optimizer = torch.optim.LBFGS([dummy_data], line_search_fn="strong_wolfe")
+
+    history = []
+    recent_losses = []
+    plateau_patience = 3
+    stop_iter = None
+    final_loss = None
+
+    for iters in range(300):
+
+        def closure():
+            optimizer.zero_grad()
+
+            dummy_pred = net(dummy_data)
+            dummy_loss = criterion(dummy_pred, gt_onehot_label_iDLG)
+
+            dummy_dy_dx = torch.autograd.grad(
+                dummy_loss, net.parameters(), create_graph=True
+            )
+
+            grad_diff = 0
+            for gx, gy in zip(dummy_dy_dx, original_dy_dx):
+                grad_diff += ((gx - gy) ** 2).sum()
+            grad_diff.backward()
+
+            return grad_diff
+
+        optimizer.step(closure)
+
+        with torch.no_grad():
+            if iters % 10 == 0:
+                dummy_pred = net(dummy_data)
+                current_loss = criterion(dummy_pred, gt_onehot_label_iDLG)
+                current_value = current_loss.item()
+                final_loss = current_value
+                print(f"[iDLG] iter {iters} loss = {current_value:.4f}")
+                history.append(tt(dummy_data[0].detach().cpu()))
+                recent_losses.append(current_value)
+
+                if len(recent_losses) >= plateau_patience:
+                    window = recent_losses[-plateau_patience:]
+                    if len(set(window)) == 1:
+                        stop_iter = iters
+                        print(
+                            "[iDLG] Loss stayed at %.4f for %d snapshots; stop optimizing."
+                            % (current_value, plateau_patience)
+                        )
+                        break
+
+    return {
+        "method": "iDLG",
+        "history": history,
+        "final_loss": final_loss,
+        "stop_iter": stop_iter,
+        "pred_label": label_pred.item(),
+    }
+
+
 if args.comp:
     print("\n================ Compare DLG vs iDLG ================\n")
 
-    res_dlg = run_attack("DLG")
-    res_idlg = run_attack("iDLG")
+    res_dlg = run_DLG()
+    res_idlg = run_iDLG()
 
     print("\n------ DLG Result ------")
     print(f"final_loss = {res_dlg['final_loss']}")
@@ -285,9 +320,12 @@ if args.comp:
 
     plt.show()
 
-else:
-    # ---------------- 原来单方法路径：保持你的风格不变 ----------------
-    res = run_attack(args.method)
+elif args.method:
+    if args.method == "DLG":
+        res = run_DLG()
+    elif args.method == "iDLG":
+        res = run_iDLG()
+
     history = res["history"]
 
     if history:
