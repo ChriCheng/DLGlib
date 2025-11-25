@@ -4,7 +4,8 @@ import math
 import os
 import numpy as np
 from pprint import pprint
-
+from pathlib import Path
+from datetime import datetime
 from PIL import Image
 import matplotlib.pyplot as plt
 
@@ -154,6 +155,7 @@ def run_DLG():
     # and 100 iterations for image and text task respectively
 
     history = []
+    mses = []
     # Early stop searching: stop when loss repeats exactly 3 times
     recent_losses = []
     plateau_patience = 3
@@ -190,9 +192,14 @@ def run_DLG():
                 current_loss = criterion(dummy_pred, dummy_onehot)
                 current_value = current_loss.item()
                 final_loss = current_value
-                print(f"[DLG] iter {iters} loss = {current_value:.4f}")
+                current_mse = torch.mean((dummy_data - gt_data) ** 2).item()
+                mses.append(current_loss)
+                print(
+                    f"[DLG] iter {iters} loss = {current_value:.4f} mses = {current_mse}"
+                )
                 history.append(tt(dummy_data[0].detach().cpu()))
                 recent_losses.append(current_value)
+
                 if len(recent_losses) >= plateau_patience:
                     window = recent_losses[-plateau_patience:]
                     if len(set(window)) == 1:
@@ -214,6 +221,7 @@ def run_DLG():
         "final_loss": final_loss,
         "stop_iter": stop_iter,
         "pred_label": pred_label,
+        "mses": mses,
     }
 
 
@@ -221,9 +229,14 @@ def run_iDLG():
 
     # 1. 从最后一层梯度预测标签（核心步骤）
     grad_last_weight = original_dy_dx[-2]  # 最后一层 FC 权重梯度
-    label_pred = torch.argmin(torch.sum(grad_last_weight, dim=-1)).detach()
-    label_pred = label_pred.view(1).long().to(device)
-
+    # label_pred = torch.argmin(torch.sum(grad_last_weight, dim=-1)).detach()
+    # label_pred = label_pred.view(1).long().to(device)
+    label_pred = (
+        torch.argmin(torch.sum(grad_last_weight, dim=-1), dim=-1)
+        .detach()
+        .reshape((1,))
+        .requires_grad_(False)
+    )
     # 2. 生成 dummy 数据
     dummy_data = torch.randn(gt_data.size()).to(device).requires_grad_(True)
     dummy_label = None  # iDLG 不优化 dummy_label
@@ -236,6 +249,7 @@ def run_iDLG():
 
     history = []
     recent_losses = []
+    mses = []
     plateau_patience = 3
     final_loss = None
     stop_iter = None
@@ -274,7 +288,11 @@ def run_iDLG():
                 current_loss = CE_loss(dummy_pred, label_pred).item()
                 current_value = current_loss
                 final_loss = current_loss
-                print(f"[iDLG] iter {iters} loss = {current_loss:.4f}")
+                current_mse = torch.mean((dummy_data - gt_data) ** 2).item()
+                mses.append(current_loss)
+                print(
+                    f"[DLG] iter {iters} loss = {current_value:.4f} mses = {current_mse}"
+                )
                 history.append(tt(dummy_data[0].detach().cpu()))
                 recent_losses.append(current_value)
                 if len(recent_losses) >= plateau_patience:
@@ -293,7 +311,24 @@ def run_iDLG():
         "final_loss": final_loss,
         "stop_iter": stop_iter,
         "pred_label": label_pred.item(),
+        "mses": mses,
     }
+
+
+def log_result(res, name):
+    """Append key metrics to result/result.log."""
+    log_dir = Path("result")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "result.log"
+    mse_last = res["mses"][-1] if res.get("mses") else None
+    input_ref = args.image if args.image else f"CIFAR index {args.index}"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(
+            f"[{timestamp}] run={name} input={input_ref} "
+            f"final_loss={res['final_loss']} stop_iter={res['stop_iter']} "
+            f"pred_label={res['pred_label']} mses_last={mse_last}\n"
+        )
 
 
 def IterPrint(history, name):
@@ -306,6 +341,10 @@ def IterPrint(history, name):
             plt.imshow(snapshot)
             plt.title("iter=%d" % (i * 10))
             plt.axis("off")
+            if args.image:
+                plt.savefig(f"{Path(args.image).stem}_DLG.png")
+            else:
+                plt.savefig(f"result/{name}.png")
 
     else:
         print("No snapshots recorded; nothing to plot.")
@@ -321,11 +360,15 @@ if args.comp:
     print(f"final_loss = {res_dlg['final_loss']}")
     print(f"stop_iter  = {res_dlg['stop_iter']}")
     print(f"pred_label = {res_dlg['pred_label']}")
+    print(f"mses = {res_dlg['mses'][-1]}")
+    log_result(res_dlg, "DLG")
 
     print("\n------ iDLG Result ------")
     print(f"final_loss = {res_idlg['final_loss']}")
     print(f"stop_iter  = {res_idlg['stop_iter']}")
     print(f"pred_label = {res_idlg['pred_label']}")
+    print(f"mses = {res_idlg['mses'][-1]}")
+    log_result(res_idlg, "iDLG")
 
     # 同时展示两种方法最后的重建结果
     plt.figure("Comparison", figsize=(10, 5))
@@ -341,6 +384,7 @@ if args.comp:
         plt.imshow(res_idlg["history"][-1])
         plt.title(f"iDLG\nloss={res_idlg['final_loss']:.4f}")
         plt.axis("off")
+
     IterPrint(res_dlg["history"], "DLG")
     IterPrint(res_idlg["history"], "iDLG")
 
@@ -351,6 +395,7 @@ elif args.method:
     elif args.method == "iDLG":
         res = run_iDLG()
 
+    log_result(res, args.method)
     history = res["history"]
 
     if history:
