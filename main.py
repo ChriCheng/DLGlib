@@ -118,7 +118,8 @@ net = LeNet().to(device)
 torch.manual_seed(1234)
 
 net.apply(weights_init)
-criterion = cross_entropy_for_onehot
+# criterion = cross_entropy_for_onehot
+criterion = nn.CrossEntropyLoss()
 
 
 # compute original gradient
@@ -155,19 +156,26 @@ def run_DLG():
     # and 100 iterations for image and text task respectively
 
     history = []
-    mses = []
+    mses = []  # record mse of dummy_data and gt_data
+
     # Early stop searching: stop when loss repeats exactly 3 times
-    recent_losses = []
+
+    recent_losses = (
+        []
+    )  # record loss(differencen between dummy gradient and original gradient)
     plateau_patience = 3
     stop_iter = None
     final_loss = None
 
+    last_grad_diff = None
     for iters in range(300):
 
         def closure():
+            nonlocal last_grad_diff
             optimizer.zero_grad()
 
             dummy_pred = net(dummy_data)
+
             dummy_onehot_label = F.softmax(dummy_label, dim=-1)
             # apply softmax to make dummy_label one-hot like
             dummy_loss = criterion(dummy_pred, dummy_onehot_label)
@@ -179,6 +187,7 @@ def run_DLG():
             grad_diff = 0  # gradient difference
             for gx, gy in zip(dummy_dy_dx, original_dy_dx):
                 grad_diff += ((gx - gy) ** 2).sum()
+            last_grad_diff = grad_diff.detach()
             grad_diff.backward()
 
             return grad_diff
@@ -188,17 +197,18 @@ def run_DLG():
         with torch.no_grad():  # record history and avoid unnecessary computation graph
             if iters % 10 == 0:
                 dummy_pred = net(dummy_data)
-                dummy_onehot = F.softmax(dummy_label, dim=-1)
-                current_loss = criterion(dummy_pred, dummy_onehot)
-                current_value = current_loss.item()
-                final_loss = current_value
+                # dummy_onehot = F.softmax(dummy_label, dim=-1)
+                # current_loss = criterion(dummy_pred, dummy_onehot)
+
+                # current_value = current_loss.item()
+
+                current_loss = last_grad_diff.item()  # grad_diff
+                final_loss = current_loss
                 current_mse = torch.mean((dummy_data - gt_data) ** 2).item()
-                mses.append(current_loss)
-                print(
-                    f"[DLG] iter {iters} loss = {current_value:.4f} mses = {current_mse}"
-                )
+                mses.append(current_mse)
+                print(f"[DLG] iter {iters} loss = {current_loss} mses = {current_mse}")
                 history.append(tt(dummy_data[0].detach().cpu()))
-                recent_losses.append(current_value)
+                recent_losses.append(current_loss)
 
                 if len(recent_losses) >= plateau_patience:
                     window = recent_losses[-plateau_patience:]
@@ -206,7 +216,7 @@ def run_DLG():
                         stop_iter = iters
                         print(
                             "[DLG] Loss stayed at %.4f for %d snapshots; stop optimizing."
-                            % (current_value, plateau_patience)
+                            % (current_loss, plateau_patience)
                         )
                         break
 
@@ -255,9 +265,11 @@ def run_iDLG():
     stop_iter = None
 
     # 5. 迭代优化
+    last_grad_diff = None
     for iters in range(300):
 
         def closure():
+            nonlocal last_grad_diff
             optimizer.zero_grad()
 
             # 前向
@@ -276,6 +288,7 @@ def run_iDLG():
             for gx, gy in zip(dummy_dy_dx, original_dy_dx):
                 grad_diff += ((gx - gy) ** 2).sum()
 
+            last_grad_diff = grad_diff.detach()
             grad_diff.backward()
             return grad_diff
 
@@ -285,23 +298,22 @@ def run_iDLG():
         if iters % 10 == 0:
             with torch.no_grad():
                 dummy_pred = net(dummy_data)
-                current_loss = CE_loss(dummy_pred, label_pred).item()
-                current_value = current_loss
+                # current_loss = CE_loss(dummy_pred, label_pred).item()
+                # current_value = current_loss
+                current_loss = last_grad_diff.item()  # grad_diff
                 final_loss = current_loss
                 current_mse = torch.mean((dummy_data - gt_data) ** 2).item()
                 mses.append(current_loss)
-                print(
-                    f"[DLG] iter {iters} loss = {current_value:.4f} mses = {current_mse}"
-                )
+                print(f"[DLG] iter {iters} loss = {current_loss} mses = {current_mse}")
                 history.append(tt(dummy_data[0].detach().cpu()))
-                recent_losses.append(current_value)
+                recent_losses.append(current_loss)
                 if len(recent_losses) >= plateau_patience:
                     window = recent_losses[-plateau_patience:]
                     if len(set(window)) == 1:
                         stop_iter = iters
                         print(
                             "[iDLG] Loss stayed at %.4f for %d snapshots; stop optimizing."
-                            % (current_value, plateau_patience)
+                            % (current_loss, plateau_patience)
                         )
                         break
 

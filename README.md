@@ -1,6 +1,6 @@
 # Deep Leakage From Gradients [[arXiv]](https://arxiv.org/abs/1906.08935) [[Webside]](https://dlg.mit.edu) 
 
-
+Notice: I changed the meaning of “loss”. Previously, the loss referred to the discrepancy between dummy_pred and dummy_onehot. However, in DLG the core objective is to minimize the difference between the dummy gradients and the original gradients. In practice, the previous loss is not even used to update the dummy data. Therefore, I redefined the loss to represent the distance between the dummy gradients and the original gradients.
 
 ```
 @inproceedings{zhu19deep,
