@@ -331,7 +331,7 @@ def log_result(res, name):
         )
 
 
-def IterPrint(history, name):
+def print_iter(history, name):
     if history:
         cols = 10
         rows = max(1, math.ceil(len(history) / cols))
@@ -385,11 +385,11 @@ if args.comp:
         plt.title(f"iDLG\nloss={res_idlg['final_loss']:.4f}")
         plt.axis("off")
     if args.image:
-        IterPrint(res_dlg["history"], args.image + "_DLG")
-        IterPrint(res_idlg["history"], args.image + "_iDLG")
+        print_iter(res_dlg["history"], args.image + "_DLG")
+        print_iter(res_idlg["history"], args.image + "_iDLG")
     else:
-        IterPrint(res_dlg["history"], f"cifar_{ args.index }_DLG")
-        IterPrint(res_idlg["history"], f"cifar_{ args.index }_iDLG")
+        print_iter(res_dlg["history"], f"cifar_{ args.index }_DLG")
+        print_iter(res_idlg["history"], f"cifar_{ args.index }_iDLG")
 
 
 elif args.method:
@@ -402,7 +402,7 @@ elif args.method:
     history = res["history"]
 
     if history:
-        IterPrint(history, args.method)
+        print_iter(history, args.method)
 
     else:
         print("No snapshots recorded; nothing to plot.")
