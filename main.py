@@ -8,9 +8,8 @@ from pathlib import Path
 from datetime import datetime
 from PIL import Image
 import matplotlib.pyplot as plt
-
 import torch
-
+from models.vision import LeNet, weights_init
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import grad
@@ -30,9 +29,9 @@ datasets_group = parser.add_mutually_exclusive_group(required=True)
 datasets_group.add_argument(
     "--cifar",
     nargs="?",
-    const=None,  # no index
-    type=int,  # optional index
-    help="CIFAR dataset. Without index for whole dataset; with index for single image.",
+    const=-1,  # 空输入时设为 -1，代表全数据集
+    type=int,
+    help="CIFAR dataset. Use --cifar <index> for single image, or --cifar (no number) for batch.",
 )
 
 datasets_group.add_argument("--image", type=str, help="the path to customized image.")
@@ -75,12 +74,18 @@ args = parser.parse_args()
 dataset, ds_value = get_dataset_choice(args)
 
 if dataset == "cifar":
-    args.index = ds_value  # int 或 None
+    if ds_value == -1:
+        args.index = None  # batch mode
+    else:
+        args.index = ds_value  # single image mode
 elif dataset == "image":
-    args.index = None  # custom image has no index
+    args.index = None  # image path，无 index
 
-single_image_mode = dataset == "image" or isinstance(ds_value, int)
-batch_mode = dataset != "image" and ds_value is None
+single_image_mode = dataset == "image" or (
+    isinstance(args.index, int) and args.index >= 0
+)
+batch_mode = dataset != "image" and args.index is None
+
 
 #  Illegal combinations detection
 if single_image_mode and args.bcomp is not None:
@@ -116,75 +121,67 @@ tp = transforms.ToTensor()  # transform to tensor
 tt = transforms.ToPILImage()  # transform to PIL image
 
 img_index = args.index
-
-
-if args.image:
-    # 1. read image
-    img = Image.open(args.image).convert("RGB")
-    target_size = (32, 32)
-
-    folder, filename = os.path.split(args.image)
-    name, ext = os.path.splitext(filename)
-    resized_path = os.path.join(folder, f"{name}_resize{ext}")
-
-    # 2. ensure size
-    if img.size == target_size:
-        img_for_model = img
-        print(f"✅ The input size has been met :{target_size}.")
-    elif os.path.exists(resized_path):
-        img_for_model = Image.open(resized_path).convert("RGB")
-        print(f"✅  Existing resized images :{resized_path}.")
-    else:
-        img_for_model = img.resize(target_size)
-        img_for_model.save(resized_path)
-        print(f"✅ Resized pic saving at :{resized_path}")
-
-    # 3. to tensor
-    gt_data = tp(img_for_model).to(device)
-
-    # 4. fake label
-    gt_label = torch.Tensor([dst[25][1]]).long().to(device)
-    print(f"⚠️  Using fake label: {dst[25][1]} for customized image.")
-
-
-else:
-    gt_data = tp(dst[img_index][0]).to(device)
-    gt_label = torch.Tensor([dst[img_index][1]]).long().to(device)
-
-gt_data = gt_data.view(1, *gt_data.size())
-
-
-gt_label = gt_label.view(  # add batch size
-    1,
-)
-gt_onehot_label = label_to_onehot(gt_label)
-
-plt.figure("Ground Truth")
-plt.imshow(tt(gt_data[0].cpu()))
-plt.axis("off")
-
-from models.vision import LeNet, weights_init
-
-net = LeNet().to(device)
-
-
-# torch.manual_seed(1234)
-
-net.apply(weights_init)
 criterion = cross_entropy_for_onehot
-# criterion = nn.CrossEntropyLoss()  # for iDLG
+# 读取并准备图像数据（仅用于非 bcomp 模式）
 
 
-# compute original gradient
-pred = net(gt_data)
-y = criterion(pred, gt_onehot_label)
-dy_dx = torch.autograd.grad(y, net.parameters())
+def prepare_data_from_args():
+    global gt_data, gt_label, gt_onehot_label, net, original_dy_dx, criterion
 
-original_dy_dx = list((_.detach().clone() for _ in dy_dx))
-# So this is FedSGD pattern where only one batch is used to compute gradient
-# even just one epoch of training hhh
+    if args.image:
+        # 1. read image
+        img = Image.open(args.image).convert("RGB")
+        target_size = (32, 32)
 
-num_classes = gt_onehot_label.size(1)
+        folder, filename = os.path.split(args.image)
+        name, ext = os.path.splitext(filename)
+        resized_path = os.path.join(folder, f"{name}_resize{ext}")
+
+        # 2. ensure size
+        if img.size == target_size:
+            img_for_model = img
+            print(f"✅ The input size has been met :{target_size}.")
+        elif os.path.exists(resized_path):
+            img_for_model = Image.open(resized_path).convert("RGB")
+            print(f"✅  Existing resized images :{resized_path}.")
+        else:
+            img_for_model = img.resize(target_size)
+            img_for_model.save(resized_path)
+            print(f"✅ Resized pic saving at :{resized_path}")
+
+        # 3. to tensor
+        gt_data = tp(img_for_model).to(device)
+
+        # 4. fake label
+        gt_label = torch.Tensor([dst[25][1]]).long().to(device)
+        print(f"⚠️  Using fake label: {dst[25][1]} for customized image.")
+
+    else:
+        gt_data = tp(dst[args.index][0]).to(device)
+        gt_label = torch.Tensor([dst[args.index][1]]).long().to(device)
+
+    gt_data = gt_data.view(1, *gt_data.size())
+    gt_label = gt_label.view(
+        1,
+    )
+    gt_onehot_label = label_to_onehot(gt_label)
+
+    plt.figure("Ground Truth")
+    plt.imshow(tt(gt_data[0].cpu()))
+    plt.axis("off")
+
+    net = LeNet().to(device)
+    net.apply(weights_init)
+
+    # compute original gradient
+    pred = net(gt_data)
+    y = criterion(pred, gt_onehot_label)
+    dy_dx = torch.autograd.grad(y, net.parameters())
+    original_dy_dx = list((_.detach().clone() for _ in dy_dx))
+
+
+if not batch_mode:
+    prepare_data_from_args()
 
 
 def run_DLG():
