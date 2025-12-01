@@ -4,6 +4,29 @@ DLGlib is a research-oriented and extensible toolkit dedicated to gradient inver
 
 ### Deep Leakage From Gradients [[arXiv]](https://arxiv.org/abs/1906.08935) [[Webside]](https://dlg.mit.edu) 
 ### Improved Deep Leakage from Gradients [[arXiv]](https://arxiv.org/abs/2001.02610) [[Webside]](https://github.com/PatrickZH/Improved-Deep-Leakage-from-Gradients) 
+## TODO
+1. figure out  the differences between method A in DLG and iDLG methods. now we use `criterion = nn.CrossEntropyLoss().to(device)  ` try to reproduce the result of iDLG. but I think the original implenmentation `criterion = cross_entropy_for_onehot` is more suitable for DLG(because we got a better result), there are three part about the difference 
+```
+criterion = nn.CrossEntropyLoss().to(device)  # iDGL use CE loss
+# criterion = cross_entropy_for_onehot
+......
+# compute original gradient
+pred = net(gt_data)
+y = criterion(pred, gt_onehot_label)
+......
+# dummy_loss = criterion(dummy_pred, F.softmax(dummy_label, dim=-1))
+# dummy_onehot_label = F.softmax(dummy_label, dim=-1)
+# dummy_loss = criterion(dummy_pred, dummy_onehot_label)
+dummy_dy_dx = torch.autograd.grad(
+    dummy_loss, net.parameters(), create_graph=True
+)
+
+
+```
+
+
+
+## Usage
 ```
 #  image on CIFAR No.25 pic by DLG or iDLG
 python main.py --cifar 25 --met methoed
@@ -17,8 +40,8 @@ python main.py --image yours.jpg --met methoed
 python main.py --image yours.jpg --comp
 python main.py --cifar 25 --comp
 
-# Compare DLG and iDLG on a batch of images.
-python main.py  --cifar --bcomp
+# Compare DLG and iDLG on a batch of images.default all pic in dataset
+python main.py  --cifar --bcomp num
 
 ```
 

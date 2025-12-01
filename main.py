@@ -121,8 +121,8 @@ tp = transforms.ToTensor()  # transform to tensor
 tt = transforms.ToPILImage()  # transform to PIL image
 
 img_index = args.index
-criterion = cross_entropy_for_onehot
-# 读取并准备图像数据（仅用于非 bcomp 模式）
+criterion = nn.CrossEntropyLoss().to(device)  # iDGL use CE loss
+# criterion = cross_entropy_for_onehot
 
 
 def prepare_data_from_args():
@@ -213,13 +213,18 @@ def run_DLG():
 
             dummy_pred = net(dummy_data)
 
-            dummy_onehot_label = F.softmax(dummy_label, dim=-1)
             # apply softmax to make dummy_label one-hot like
-            dummy_loss = criterion(
-                dummy_pred, F.softmax(dummy_label, dummy_onehot_label)
+
+            dummy_loss = -torch.mean(
+                torch.sum(
+                    torch.softmax(dummy_label, -1)
+                    * torch.log(torch.softmax(dummy_pred, -1)),
+                    dim=-1,
+                )
             )
             # dummy_loss = criterion(dummy_pred, F.softmax(dummy_label, dim=-1))
-
+            # dummy_onehot_label = F.softmax(dummy_label, dim=-1)
+            # dummy_loss = criterion(dummy_pred, dummy_onehot_label)
             dummy_dy_dx = torch.autograd.grad(
                 dummy_loss, net.parameters(), create_graph=True
             )
@@ -247,6 +252,7 @@ def run_DLG():
                 recent_losses.append(current_loss)
 
                 if current_loss < 0.000001:
+
                     break
 
     # predict label from dummy_label
@@ -503,18 +509,30 @@ elif args.bcomp is not None:
     result_idlg = [
         100 * sum(m <= t for m in mses_idlg) / len(mses_idlg) for t in thresholds
     ]
-    plt.figure()
-    plt.plot(thresholds, result_dlg, marker="o", label="DLG")
-    plt.plot(thresholds, result_idlg, marker="*", label="iDLG")
+
+    plt.figure(figsize=(6, 4))
+
+    plt.plot(thresholds, result_dlg, marker="o", markersize=8, linewidth=2, label="DLG")
+    plt.plot(
+        thresholds, result_idlg, marker="*", markersize=10, linewidth=2, label="iDLG"
+    )
+
+    plt.xscale("log")  # ⭐ 关键：解决横坐标挤在一起的问题
+    plt.gca().invert_xaxis()  # 与你的第一张图一致（阈值越小在右边）
+
     plt.xlabel("Fidelity Threshold (MSE)")
     plt.ylabel("% of Good Fidelity")
     plt.title(f"{dataset.upper()}")
+
+    plt.ylim(0, 105)  # ⭐ 强制显示 0–100 区间
+
+    plt.xticks(thresholds, [str(t) for t in thresholds])  # ⭐ 让刻度按你的方式显示
+
+    plt.grid(alpha=0.3)
     plt.legend()
-    plt.gca().invert_xaxis()
-    plt.xticks(thresholds, [str(t) for t in thresholds])  # 显示完整 x 轴刻度
-    # plt.gca().set_xscale("log")  # 可
+
     Path(f"result/{dataset}_bcomp").mkdir(parents=True, exist_ok=True)
-    plt.savefig(f"result/{dataset}_bcomp/fidelity.png")
+    plt.savefig(f"result/{dataset}_bcomp/fidelity.png", dpi=300)
     plt.close()
 
 
