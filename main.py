@@ -16,7 +16,6 @@ from torch.autograd import grad
 import torchvision
 from torchvision import models, datasets, transforms
 
-
 print(torch.__version__, torchvision.__version__)
 
 from utils import label_to_onehot, cross_entropy_for_onehot
@@ -110,8 +109,13 @@ if dataset == "image" and args.bcomp is not None:
 device = "cpu"
 if torch.cuda.is_available():
     device = "cuda"
-else:
-    torch.backends.mkldnn.enabled = False  # disable MKLDNN to get second-order grads on M2 CPU(in fact is Mac vision of PyTorch)
+    # Set deterministic behavior for cuda
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.set_default_dtype(torch.float64)  
+torch.backends.mkldnn.enabled = False
+# else:
+#     torch.backends.mkldnn.enabled = False  # disable MKLDNN to get second-order grads on M2 CPU(in fact is Mac vision of PyTorch)
 
 print("Running on %s" % device)
 print(f"Using method: {args.method}")
