@@ -112,7 +112,7 @@ if torch.cuda.is_available():
     # Set deterministic behavior for cuda
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    torch.set_default_dtype(torch.float64)  
+    torch.set_default_dtype(torch.float64)
 torch.backends.mkldnn.enabled = False
 # else:
 #     torch.backends.mkldnn.enabled = False  # disable MKLDNN to get second-order grads on M2 CPU(in fact is Mac vision of PyTorch)
@@ -505,7 +505,6 @@ elif args.bcomp is not None:
         print_iter(res_dlg["history"], f"{dataset}_{idx}_DLG")
         print_iter(res_idlg["history"], f"{dataset}_{idx}_iDLG")
 
-    # 统计 Fidelity 分布并绘图
     thresholds = [0.01, 0.005, 0.001, 0.0005, 0.0001]
     result_dlg = [
         100 * sum(m <= t for m in mses_dlg) / len(mses_dlg) for t in thresholds
@@ -521,16 +520,16 @@ elif args.bcomp is not None:
         thresholds, result_idlg, marker="*", markersize=10, linewidth=2, label="iDLG"
     )
 
-    plt.xscale("log")  # ⭐ 关键：解决横坐标挤在一起的问题
-    plt.gca().invert_xaxis()  # 与你的第一张图一致（阈值越小在右边）
+    plt.xscale("log")
+    plt.gca().invert_xaxis()
 
     plt.xlabel("Fidelity Threshold (MSE)")
     plt.ylabel("% of Good Fidelity")
     plt.title(f"{dataset.upper()}")
 
-    plt.ylim(0, 105)  # ⭐ 强制显示 0–100 区间
+    plt.ylim(0, 105)
 
-    plt.xticks(thresholds, [str(t) for t in thresholds])  # ⭐ 让刻度按你的方式显示
+    plt.xticks(thresholds, [str(t) for t in thresholds])
 
     plt.grid(alpha=0.3)
     plt.legend()
